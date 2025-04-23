@@ -20,9 +20,14 @@
     }).addTo(map);
 
     map.on('click', function(e) {
-      L.marker(e.latlng).addTo(map)
-        .bindPopup('Sinu marker')
+      const marker = L.marker(e.latlng).addTo(map)
+        .bindPopup('Klõpsa markeril, et see eemaldada')
         .openPopup();
+
+      // Kui klikid markerile → kustuta see
+      marker.on('click', function() {
+        map.removeLayer(marker);
+      });
     });
   </script>
 </body>
