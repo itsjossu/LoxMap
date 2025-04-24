@@ -1,33 +1,262 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>LoxMap</title>
+  <title>LostMap</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css" />
   <style>
     #map { height: 100vh; }
+    #drag-marker, #locate-button, #search-input, #admin-button {
+      position: absolute;
+      z-index: 1000;
+      background-color: white;
+      border: 2px solid #444;
+      border-radius: 6px;
+      padding: 8px;
+      cursor: pointer;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+      font-size: 14px;
+    }
+    #drag-marker { top: 10px; right: 10px; user-select: none; }
+    #locate-button { top: 50%; left: 10px; transform: translateY(-50%); }
+    #search-input { top: 60%; left: 10px; transform: translateY(-50%); width: 200px; }
+    #admin-button { bottom: 10px; left: 10px; }
+    .popup-button {
+      background-color: #f0f0f0;
+      border: 1px solid #888;
+      border-radius: 4px;
+      padding: 4px 8px;
+      cursor: pointer;
+      font-size: 14px;
+      display: inline-block;
+      margin: 5px 5px 5px 0;
+    }
+    .popup-link {
+      display: block;
+      margin-top: 5px;
+      font-size: 13px;
+      color: blue;
+      text-decoration: underline;
+    }
   </style>
 </head>
 <body>
+  <input type="text" id="search-input" placeholder="Search for a place...">
+  <div id="drag-marker" draggable="true">🧭 Drag to map</div>
+  <div id="locate-button">📍 My Location</div>
   <div id="map"></div>
-  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
-  <script>
-    const map = L.map('map').setView([59.437, 24.7535], 13); // Tallinna koordinaadid
+  <button id="admin-button">🔐 Admin</button>
 
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; OpenStreetMap kaardid'
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js"></script>
+  <script>
+    const map = L.map('map').setView([59.437, 24.7535], 13);
+
+    // ✅ Satelliitkaart (Esri)
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      attribution: 'Tiles © Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community'
     }).addTo(map);
 
-    map.on('click', function(e) {
-      const marker = L.marker(e.latlng).addTo(map)
-        .bindPopup('Klõpsa markeril, et see eemaldada')
-        .openPopup();
+    let savedMarkers = JSON.parse(localStorage.getItem('markers')) || [];
+    let pendingMarkers = JSON.parse(localStorage.getItem('pendingMarkers')) || [];
 
-      // Kui klikid markerile → kustuta see
-      marker.on('click', function() {
-        map.removeLayer(marker);
+    function createMarker(lat, lng, title) {
+      const marker = L.marker([lat, lng], { draggable: false }).addTo(map);
+      const content = document.createElement('div');
+
+      const titleBtn = document.createElement('button');
+      titleBtn.innerText = title;
+      titleBtn.className = 'popup-button';
+      titleBtn.onclick = function () {
+        const password = prompt("Sisesta nime muutmise salasõna:");
+        if (password === 'sannuxjossu') {
+          const newTitle = prompt("Enter a new name:", titleBtn.innerText);
+          if (newTitle && newTitle !== titleBtn.innerText) {
+            titleBtn.innerText = newTitle;
+            savedMarkers = savedMarkers.map(m => {
+              if (m.lat === lat && m.lng === lng && m.title === title) {
+                return { lat, lng, title: newTitle };
+              }
+              return m;
+            });
+            localStorage.setItem('markers', JSON.stringify(savedMarkers));
+          }
+        } else {
+          alert("❌ Vale salasõna!");
+        }
+      };
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.innerText = '🗑 Kustuta';
+      deleteBtn.className = 'popup-button';
+      deleteBtn.onclick = function () {
+        const password = prompt("Sisesta kustutamise salasõna:");
+        if (password === 'sannuxjossu') {
+          map.removeLayer(marker);
+          savedMarkers = savedMarkers.filter(m => !(m.lat === lat && m.lng === lng && m.title === title));
+          localStorage.setItem('markers', JSON.stringify(savedMarkers));
+          const notice = L.popup().setLatLng([lat, lng]).setContent("✅ Marker kustutati!").openOn(map);
+          setTimeout(() => map.closePopup(notice), 1500);
+        } else {
+          alert("❌ Vale salasõna!");
+        }
+      };
+
+      const googleLink = document.createElement('a');
+      googleLink.href = `https://www.google.com/maps?q=${lat},${lng}`;
+      googleLink.innerText = '📍 Vaata Google Mapsis';
+      googleLink.className = 'popup-link';
+      googleLink.target = '_blank';
+
+      content.appendChild(titleBtn);
+      content.appendChild(deleteBtn);
+      content.appendChild(googleLink);
+      marker.bindPopup(content);
+    }
+
+    savedMarkers.forEach(m => createMarker(m.lat, m.lng, m.title));
+
+    const dragMarker = document.getElementById('drag-marker');
+    dragMarker.addEventListener('dragstart', function (e) {
+      e.dataTransfer.setData('text/plain', 'new-marker');
+    });
+
+    map.getContainer().addEventListener('dragover', function (e) {
+      e.preventDefault();
+    });
+
+    map.getContainer().addEventListener('drop', function (e) {
+      e.preventDefault();
+      const mapRect = map.getContainer().getBoundingClientRect();
+      const x = e.clientX - mapRect.left;
+      const y = e.clientY - mapRect.top;
+      const latlng = map.containerPointToLatLng([x, y]);
+      const title = prompt("Sisesta koha nimi:");
+      if (title) {
+        const newMarker = { lat: latlng.lat, lng: latlng.lng, title };
+        pendingMarkers.push(newMarker);
+        localStorage.setItem('pendingMarkers', JSON.stringify(pendingMarkers));
+        alert("📨 Marker saadeti kinnitamiseks!");
+      }
+    });
+
+    document.getElementById('locate-button').addEventListener('click', () => {
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          pos => {
+            const { latitude, longitude } = pos.coords;
+            map.setView([latitude, longitude], 16);
+            L.circleMarker([latitude, longitude], {
+              radius: 8,
+              color: 'blue',
+              fillColor: '#30f',
+              fillOpacity: 0.6
+            }).addTo(map).bindPopup("📍 You are here").openPopup();
+          },
+          err => alert("Failed to get location: " + err.message)
+        );
+      } else {
+        alert("Your browser does not support geolocation.");
+      }
+    });
+
+    const searchInput = document.getElementById('search-input');
+    const geocoder = L.Control.Geocoder.nominatim();
+    let searchMarker = null;
+
+    function performSearch() {
+      const searchQuery = searchInput.value.trim();
+      if (searchQuery.length >= 3) {
+        geocoder.geocode(searchQuery, function(results) {
+          if (results.length > 0) {
+            const firstResult = results[0];
+            map.setView(firstResult.center, 14);
+            if (searchMarker) {
+              map.removeLayer(searchMarker);
+            }
+            searchMarker = L.marker(firstResult.center).addTo(map);
+            searchMarker.bindPopup(firstResult.name || firstResult.html || 'Location found').openPopup();
+          } else {
+            alert('No results found!');
+          }
+        });
+      }
+    }
+
+    searchInput.addEventListener('keyup', function(e) {
+      if (e.key === "Enter") {
+        performSearch();
+      }
+    });
+
+    searchInput.addEventListener('blur', function() {
+      performSearch();
+    });
+
+    function approveMarker(index) {
+      const marker = pendingMarkers[index];
+      createMarker(marker.lat, marker.lng, marker.title);
+      savedMarkers.push(marker);
+      localStorage.setItem('markers', JSON.stringify(savedMarkers));
+      pendingMarkers.splice(index, 1);
+      localStorage.setItem('pendingMarkers', JSON.stringify(pendingMarkers));
+      alert("✅ Marker kinnitatud!");
+      refreshAdminView();
+    }
+
+    function rejectMarker(index) {
+      pendingMarkers.splice(index, 1);
+      localStorage.setItem('pendingMarkers', JSON.stringify(pendingMarkers));
+      alert("❌ Marker tagasi lükatud.");
+      refreshAdminView();
+    }
+
+    function showLocation(lat, lng, title, index) {
+      map.setView([lat, lng], 16);
+      const locationMarker = L.marker([lat, lng]).addTo(map).bindPopup(`Asukoht: ${title}`).openPopup();
+      const approveBtn = document.createElement('button');
+      approveBtn.textContent = "✅ Kinnita";
+      approveBtn.className = "popup-button";
+      approveBtn.onclick = () => approveMarker(index);
+      const rejectBtn = document.createElement('button');
+      rejectBtn.textContent = "❌ Keeldu";
+      rejectBtn.className = "popup-button";
+      rejectBtn.onclick = () => rejectMarker(index);
+      const container = document.createElement('div');
+      container.appendChild(approveBtn);
+      container.appendChild(rejectBtn);
+      locationMarker.bindPopup(container).openPopup();
+    }
+
+    function refreshAdminView() {
+      const container = document.createElement('div');
+      pendingMarkers.forEach((m, i) => {
+        const div = document.createElement('div');
+        div.style.marginBottom = '10px';
+        div.innerHTML = `<strong>${m.title}</strong><br>Lat: ${m.lat.toFixed(5)}, Lng: ${m.lng.toFixed(5)}<br>`;
+        const showLocationBtn = document.createElement('button');
+        showLocationBtn.textContent = "📍 Näita asukohta";
+        showLocationBtn.className = "popup-button";
+        showLocationBtn.onclick = () => showLocation(m.lat, m.lng, m.title, i);
+        div.appendChild(showLocationBtn);
+        container.appendChild(div);
       });
+      L.popup().setLatLng(map.getCenter()).setContent(container).openOn(map);
+    }
+
+    document.getElementById('admin-button').addEventListener('click', () => {
+      const password = prompt("Sisesta admini salasõna:");
+      if (password !== 'sannuxjossu') {
+        alert("❌ Vale salasõna!");
+        return;
+      }
+      if (pendingMarkers.length === 0) {
+        alert("📭 Ühtegi ootavat markerit pole.");
+        return;
+      }
+      refreshAdminView();
     });
   </script>
 </body>
